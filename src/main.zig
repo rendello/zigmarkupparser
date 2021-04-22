@@ -1,3 +1,5 @@
+//! Direct-coded lexer.
+
 const std = @import("std");
 const print = std.debug.print;
 
@@ -25,6 +27,8 @@ const Token = struct {
 
 // This is some {{i}}test text{{end i}}.
 // {{link url="https://example.com"}}Here{{end link}}
+// {{ignore_tags id="it1"}} {{end ignore_tags id="it1"}}
+// ^^^ Ignores all tags except its end with same ID.
 
 
 const Lexer = struct {
@@ -32,12 +36,18 @@ const Lexer = struct {
     index: usize,
     line: u32,
     col: u32,
-    mode: Mode = .normal,
+    mode: Mode = .start,
 
     const Mode = enum {
-        normal,
-        in_tag,
-        in_str,
+        single_brace_open,
+        single_brace_close,
+        equals_sign,
+        start,              // LOOKAT: same as text?
+        text,               // General text, not in tags.
+        identifier,         // Tag and param names.
+        double_brace_open,  // Tag open.
+        double_brace_close, // Tag close.
+        string,             // Argument for tag params.
     };
 
     fn init(text: []const u8) Lexer {
@@ -51,55 +61,57 @@ const Lexer = struct {
         };
     }
 
-    /// Safe index, null == string end.
-    fn look_ahead(self: Lexer, relative_index: u32) ?u8 {
-        const new_index = self.index + relative_index;
-        if (new_index < self.text_buff.len) {
-            return self.text_buff[new_index];
-        } else {
-            return null;
-        }
-    }
-
     /// Tokenize entire string in one pass.
-    fn lex(self: Lexer) void {
+    fn lex(self: *Lexer) !void {
         var tokens = std.ArrayList(Token).init(allocator);
         var last_token_end: usize = 0;
 
         while (self.index < self.text_buff.len) {
-            if (mode == .normal) {
-                if (self.text_buffer[self.index] == '{'
-                    and self.look_ahead(1) == '{'
-                    and self.look_ahead(2) != '{'
+            if (self.mode == .normal) {
+
+                // "{{"
+                if (self.text_buff[self.index] == '{'
+                    and self.index+1 < self.text_buff.len
+                    and self.text_buff[self.index+1] == '{'
                 ) {
-                    // Push text.
-                    tokens.append(
+                    if (self.index > last_token_end) {
+                        // Push text, if it exists.
+                        try tokens.append(
+                            Token {.tag=.text, .start=last_token_end, .end=self.index}
+                        );
+                        last_token_end = self.index - 1;
+                    }
+
+                    // Push brace open.
+                    self.index += 2;
+                    try tokens.append(
                         Token {
-                            .tag = .text,
+                            .tag = .double_brace_open,
                             .start = last_token_end,
                             .end = self.index
                         }
                     );
 
-                    // Push brace open.
-                    self.index += 2;
-                    self.mode = in_tag;
-                    t.tag = .double_brace_open;
-                    t.end = self.index;
-                    return t;
+                    self.mode = .in_tag;
                 }
             }
-            else if (mode == .in_tag) {
-                if (self.text_buffer[self.index] == '}'
-                    and self.look_ahead(1) == '}'
+            else if (self.mode == .in_tag) {
+                if (self.text_buff[self.index] == '}'
+                    and self.index+1 < self.text_buff.len
+                    and self.text_buff[self.index+1] == '}'
                 ) {
                     self.index += 2;
-                    self.mode = normal;
-                    t.tag = .double_brace_close;
-                    t.end = self.index;
-                    return t;
+                    self.mode = .normal;
+                    try tokens.append(
+                        Token {
+                            .tag = .double_brace_close,
+                            .start = last_token_end,
+                            .end = self.index
+                        }
+                    );
                 }
             }
+            print("{}", .{tokens.items});
         }
     }
 };
@@ -109,6 +121,7 @@ const Lexer = struct {
 pub fn main() anyerror!void {
     std.log.info("All your codebase are belong to us. 日本語,", .{});
     var l = Lexer.init("Hello, world!");
+    try l.lex();
 }
 
 
